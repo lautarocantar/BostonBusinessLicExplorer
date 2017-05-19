@@ -1,0 +1,381 @@
+##################################################################################
+
+# Author: Lautaro Cantar
+# E-mail: cantar.l@husky.neu.edu or lautaro.cantar@gmail.com
+# Webpage: lautarocantar.com
+
+##################################################################################
+
+# BOSTON BUSINESS LICENSES EXPLORER
+
+##################################################################################
+
+# ---------------------------------------------
+#              0. Intro (packages & datasets)
+# ---------------------------------------------
+
+
+# Loading the packages that will be required for building the visualization
+suppressPackageStartupMessages(library(stats))
+suppressPackageStartupMessages(library(rgdal))
+suppressPackageStartupMessages(library(sp))
+suppressPackageStartupMessages(library(ggmap))
+suppressPackageStartupMessages(library(rgeos))
+suppressPackageStartupMessages(library(lubridate))
+suppressPackageStartupMessages(library(dplyr))
+# suppressPackageStartupMessages(library(plyr))
+suppressPackageStartupMessages(library(stringr))
+suppressPackageStartupMessages(library(ggplot2))
+# suppressPackageStartupMessages(library(stringi))
+# suppressPackageStartupMessages(library(stringr))
+suppressPackageStartupMessages(library(magrittr))
+suppressPackageStartupMessages(library(shiny))
+suppressPackageStartupMessages(library(shinydashboard))
+suppressPackageStartupMessages(library(leaflet))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+
+# Loading the data
+setwd("C:/Users/erica/Dropbox/Project-03")
+p3.dat <- read.csv("p3.dat.csv")
+description <- read.csv("description.csv")
+
+
+##### UNIQUE Businesses
+p3.dat.unique <- p3.dat[match(unique(p3.dat$UNIQUE.ID), p3.dat$UNIQUE.ID), ]
+
+
+##### Map function
+ReadOGR <- function(dat, layer) {
+  readOGR(dat, layer = layer)
+  # %>% spTransform(proj4mass)
+}
+
+tracts.geo <- ReadOGR("data/geo-tracts-2015/Tracts_Boston_2015_BARI", "Tracts_Boston BARI")
+bpd.geo <- ReadOGR("data/geo-infrastructure/Base Layers", "BRA_Planning_Districts")
+
+
+# ------------------------------------------------------------------------------------------
+#                                  1. User Interface
+# ------------------------------------------------------------------------------------------
+
+body <- dashboardBody(
+  fluidRow(
+    
+    box(
+      title = "Select your filters", width = 6, status = "primary",
+      
+      # First select input: select the year that you want to see the data
+      selectInput(inputId = "year", label = "Select Year:",
+                  c("All" = "ONES",
+                    "2012" = "y.2012",
+                    "2013" = "y.2013",
+                    "2014" = "y.2014",
+                    "2015" = "y.2015",
+                    "2016" = "y.2016")
+      ),
+      
+      # Second select input: the category that you want to see in particular
+      selectInput(inputId = "category", label = "Select Analysis level:",
+                  c("All" = "ONES",
+                    "Local" = "LOCAL.2",
+                    "Non-Local" = "NON.LOCAL",
+                    "Issuances" = "START.YEAR",
+                    "Expirations" = "END.YEAR",
+                    "Renewals" = "RENEW",
+                    "Unique Businesses" = "UNIQUE.ID")
+      ),
+      
+      # Description box that shows information about the user's selection
+      box(width = 12, status = "primary",
+          textOutput(outputId = "description")),
+      
+      # Histogram showing the total amount of licenses issue for each NewCategory (Food, Alcohol, etc.) depending on 
+      # the year and the category chosen above
+      plotOutput("hist")
+      
+    ),
+    
+    #This is creating a new column where I will have the map and the boxes with extra data
+    box(
+      title = "Introduction", width = 6, solidHeader = TRUE, status = "primary",
+      "The Boston Business Licenses Explorer is an interactive tool that allows policy makers and researchers to 
+      have a multilayer analysis from the Boston Business Licenses dataset. The information presented uses the 
+      Business Licenses issued by the City of Boston from 2012 to 2016."
+    ),
+    
+    box(title = "Map", width = 6, status = "primary",
+        
+        column(width = 6,
+               selectInput(inputId = "level", label = "Select Level:",
+                           c("Individual case level" = "ind-level",
+                             "Census Tract level" = "ct-level",
+                             "Neighborhood level" = "bra-level")
+               )),
+        
+        column(width = 6,
+               selectInput(inputId = "bus.cat", label = "Select the Business Category:",
+                           c("All" = "ONES",
+                             "General Business Activity" = "GBA",
+                             "Food" = "Food",
+                             "Recreational" = "Recreational",
+                             "Alcohol" = "Alcohol",
+                             "Self Service Station" = "SSS",
+                             "Entertainment" = "Entertainment")
+               )),
+        
+        #Map
+        leafletOutput("map")
+        
+    ),
+    box(tags$p("    Lauti Cantar - lautarocantar.com - Spring 2017"))
+    )
+  )
+
+# We'll save it in a variable `ui` so that we can preview it in the console
+ui <- dashboardPage(
+  dashboardHeader(title = "Boston Business Licenses Explorer",
+                  titleWidth = 350),
+  dashboardSidebar(disable = TRUE),
+  body,
+  skin = "blue"
+)
+
+# ------------------------------------------------------------------------------------------
+#                                     2. Server.ui
+# ------------------------------------------------------------------------------------------
+
+
+server <- function(input, output) {
+  
+  ###### REACTIVE FUNCTIONS ######
+  
+  # Reactive function for the licenses to create input tables that will be used for the histogram
+  dat <- reactive({
+    p3.dat %>% 
+      filter(!is.na(p3.dat[input$year]), !is.na(p3.dat[input$bus.cat]), !is.na(p3.dat[input$category])) %>%    #Filtering only the observations for the year selected
+      select(NewCategories, ONES, LOCAL.2, NON.LOCAL, RENEW, START.YEAR, END.YEAR, BUSINESSNAME, B.X, B.Y)    #Creating a table with the aggregated number of each category
+  })
+  
+  # Reactive function for the UNIQUE BUSINESSES to create input tables that will be used for the histogram
+  dat.unique <- reactive({
+    p3.dat.unique %>% 
+      filter(!is.na(p3.dat.unique[input$year]), !is.na(p3.dat.unique[input$bus.cat]), !is.na(p3.dat.unique[input$category])) %>%
+      select(NewCategories, BUSINESSNAME, B.X, B.Y, UNIQUE.ID, ONES)
+  })
+  
+  ###### HISTOGRAM ######
+  
+  # This is the histogram chunck of code.
+  output$hist<-renderPlot({
+    print(dat())
+    
+    ### Graph YEAR + ALL CATEGORIES
+    if(input$category == "ONES"){
+      q <- ggplot(dat(), aes(x= NewCategories, y = ONES)) + 
+                  geom_bar(stat="identity", fill = "#0000CC") + 
+                  xlab("Categories") + ylab("Total Liceneses") + 
+                  theme(panel.background = element_blank(), 
+                        # axis.title.y =  element_blank(),
+                        panel.grid.major.y = element_line(colour = "grey"), 
+                        axis.text = element_text(size=10))
+      
+      
+      ### Graph START.YEAR (OPENINGS) + ALL CATEGORIES
+    } else if (input$category == "START.YEAR") {
+      q <- ggplot(dat(), aes(x= START.YEAR, y = ONES)) + 
+                  geom_bar(stat="identity", fill = "#0000CC") + 
+                  xlab("Year") + ylab("Total Liceneses") + 
+                  theme(panel.background = element_blank(), 
+                        # axis.title.y =  element_blank(),
+                        panel.grid.major.y = element_line(colour = "grey"), 
+                        axis.text = element_text(size=10))
+      
+      
+      ### Graph END.YEAR (EXPIRATIONS) + ALL CATEGORIES
+    } else if (input$category == "END.YEAR") {
+      q <- ggplot(dat(), aes(x= END.YEAR, y = ONES)) + 
+                  geom_bar(stat="identity", fill = "#0000CC") + 
+                  xlab("Year") + ylab("Total Liceneses") + 
+                  theme(panel.background = element_blank(), 
+                        # axis.title.y =  element_blank(),
+                        panel.grid.major.y = element_line(colour = "grey"), 
+                        axis.text = element_text(size=10))
+      
+      ### Graph RENEWALS + ALL CATEGORIES
+    } else if (input$category == "RENEW") {
+      q <- ggplot(dat(), aes(x= NewCategories, y = RENEW)) + 
+                  geom_bar(stat="identity", fill = "#0000CC") + 
+                  xlab("Categories") + ylab("Total Liceneses") + 
+                  theme(panel.background = element_blank(), 
+                        # axis.title.y =  element_blank(),
+                        panel.grid.major.y = element_line(colour = "grey"), 
+                        axis.text = element_text(size=10))
+      
+      
+      ### Graph NON.LOCAL + ALL CATEGORIES
+    } else if (input$category == "NON.LOCAL") {
+      q <- ggplot(dat(), aes(x= NewCategories, y = NON.LOCAL)) + 
+                geom_bar(stat="identity", fill = "#0000CC") + 
+                xlab("Categories") + ylab("Total Liceneses") + 
+                theme(panel.background = element_blank(), 
+                      # axis.title.y =  element_blank(),
+                      panel.grid.major.y = element_line(colour = "grey"), 
+                      axis.text = element_text(size=10))
+      
+      
+      ### Graph UNIQUE.ID + ALL CATEGORIES
+    } else if (input$category == "UNIQUE.ID") {
+      q <- ggplot(dat.unique(), aes(x= NewCategories, y = ONES)) + 
+                geom_bar(stat="identity", fill = "#0000CC") + 
+                xlab("Categories") + ylab("Total Businesses") + 
+                theme(panel.background = element_blank(), 
+                      # axis.title.y =  element_blank(),
+                      panel.grid.major.y = element_line(colour = "grey"), 
+                      axis.text = element_text(size=10))
+
+    } else {
+      #(input$category == LOCAL) 
+      q <- ggplot(dat(), aes(x= NewCategories, y = LOCAL.2)) + 
+                geom_bar(stat="identity", fill = "#0000CC") + 
+                xlab("Categories") + ylab("Total Liceneses") + 
+                theme(panel.background = element_blank(), 
+                      # axis.title.y =  element_blank(),
+                      panel.grid.major.y = element_line(colour = "grey"), 
+                      axis.text = element_text(size=10))
+              
+    }
+    
+    # Showing the graph
+    q
+    
+  })
+  
+  ###### MAP ######
+  
+  # Reactive functions for the map
+
+  dat.ct <- reactive({
+    p3.dat %>% 
+      filter(!is.na(p3.dat[input$year]), !is.na(p3.dat[input$bus.cat]), !is.na(p3.dat[input$category])) %>%
+      group_by(CT_ID_10) %>% 
+      tally()
+  })
+  
+  dat.bra <- reactive({
+  p3.dat %>% 
+   filter(!is.na(p3.dat[input$year]), !is.na(p3.dat[input$bus.cat]), !is.na(p3.dat[input$category])) %>%
+   group_by(BRA_PD) %>% 
+   tally()
+  })
+  
+  
+  
+  GetTractMap <- function(shapefile, mydata){
+    
+    # Transforming the class
+    mydata$CT_ID_10 <- as.factor(mydata$CT_ID_10)
+    
+    # Left joing with map shapes files
+    dat.map <- shapefile
+    dat.map@data <- shapefile@data %>%
+      left_join(mydata, by = "CT_ID_10")
+    dat.map
+  }
+  
+  
+  GetNeighborhoodMap <- function(shapefile, mydata){
+    
+    # Transforming the class
+    mydata$Nbhd <- as.factor(mydata$BRA_PD)
+    
+    # Left joing with map shapes files
+    dat.map <- shapefile
+    dat.map@data <- shapefile@data %>%
+      left_join(mydata, by = "Nbhd")
+    dat.map
+  }
+  
+  
+  output$map <- renderLeaflet({
+
+    #### INDIVIDUAL LEVEL MAP ####    
+    if(input$level == "ind-level"){
+      
+      #### UNIQUE.ID ####    
+      if(input$category == "UNIQUE.ID"){
+      leaflet(dat.unique()) %>% 
+        addProviderTiles(providers$CartoDB.Positron) %>%
+        fitBounds(~min(B.X), ~min(B.Y), ~max(B.X), ~max(B.Y)) %>% 
+          addMarkers(~B.X, ~B.Y, clusterOptions = markerClusterOptions(), 
+                     popup = ~paste("Business name:", BUSINESSNAME))
+        
+      #### LICENSES LEVEL MAP ####    
+      } else{
+        leaflet(dat()) %>% 
+          addProviderTiles(providers$CartoDB.Positron) %>%
+          fitBounds(~min(B.X), ~min(B.Y), ~max(B.X), ~max(B.Y)) %>% 
+          addMarkers(~B.X, ~B.Y, clusterOptions = markerClusterOptions(),
+                     popup = ~paste("Business name:", BUSINESSNAME)) 
+      }
+      
+      #### CT  LEVEL MAP ####    
+     } else if (input$level == "ct-level") {
+       mapa.dat <- GetTractMap(tracts.geo, dat.ct())
+       pal <- colorNumeric("Blues", NULL)
+       
+       leaflet(mapa.dat) %>% 
+         addProviderTiles(providers$CartoDB.Positron,
+                          options = providerTileOptions(noWrap = TRUE)) %>%
+         addPolygons(
+           fillColor = ~pal(n),
+           weight = 1,
+           color = "#333333",
+           opacity = 0.5,
+           fillOpacity = 0.7)
+       
+      
+      #### Neighborhood level Map ####
+    } else if (input$level == "bra-level") {
+      mapa.dat <- GetNeighborhoodMap(bpd.geo, dat.bra())
+      pal <- colorNumeric("Blues", NULL)
+      leaflet(mapa.dat) %>% 
+        addProviderTiles(providers$CartoDB.Positron,
+                         options = providerTileOptions(noWrap = TRUE)) %>%
+        addPolygons(
+          fillColor = ~pal(n),
+          weight = 1,
+          color = "#333333",
+          opacity = 0.5,
+          fillOpacity = 0.7)
+    }
+    
+  })
+  
+  ###### TEXT ######
+  
+  # Reactive function for the Text
+  dat.text <- reactive({
+    description %>%
+      filter(description$Variable == input$category) %>% 
+      select(Description)
+  })
+  
+  ## Text output
+  output$description <- renderText({
+    gato <- as.character(dat.text()$Description)
+    paste(gato)
+    #)
+  })
+  
+  
+}
+
+
+# ------------------------------------------------------------------------------------------
+#                            3. Calling the final visualization
+# ------------------------------------------------------------------------------------------
+
+shinyApp(ui, server)
+
+
